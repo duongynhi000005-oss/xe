@@ -192,18 +192,19 @@ func (o *observer) sample() {
 		}
 	}()
 
-	accounts := o.node.GetAllAccounts()
-	s.Accounts = len(accounts)
+	frontiers := o.node.Ledger.Frontiers()
+	s.Accounts = len(frontiers)
 
-	lines := make([]string, 0, len(accounts))
-	for _, a := range accounts {
-		s.Blocks += a.BlockCount
-		fh := o.node.Ledger.FinalHeight(a.Address)
+	lines := make([]string, 0, len(frontiers))
+	for account, hash := range frontiers {
+		bc := o.node.Ledger.GetChainLength(account)
+		s.Blocks += bc
+		fh := o.node.Ledger.FinalHeight(account)
 		s.FinalHeightSum += fh
-		if uint64(a.BlockCount) > fh {
+		if uint64(bc) > fh {
 			s.UnfinalizedPositions++
 		}
-		lines = append(lines, a.Address+":"+a.Frontier+":"+strconv.Itoa(a.BlockCount))
+		lines = append(lines, account+":"+hash+":"+strconv.Itoa(bc))
 	}
 
 	sort.Strings(lines)

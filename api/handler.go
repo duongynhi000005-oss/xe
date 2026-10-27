@@ -41,6 +41,7 @@ type nodeBackend interface {
 	GetFrontiers() map[string]string
 	GetFrontiersDetailed() []node.FrontierInfo
 	GetAllAccounts() []node.AccountSummary
+	GetAccountsPage(offset, limit int) []node.AccountSummary
 	GetSupply() *core.SupplyReport
 	GetRecentBlocks(limit int) []*core.Block
 	SubmitBlock(b *core.Block) error
@@ -627,22 +628,8 @@ func (h *Handler) handleGetAllPending(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGetAllAccounts(w http.ResponseWriter, r *http.Request) {
 	offset, limit := parsePagination(r)
-	accounts := h.node.GetAllAccounts()
-	sort.Slice(accounts, func(i, j int) bool {
-		if a, b := accounts[i].Balances["XE"], accounts[j].Balances["XE"]; a != b {
-			return a > b
-		}
-		return accounts[i].Address < accounts[j].Address
-	})
-	if offset >= len(accounts) {
-		writeJSON(w, http.StatusOK, []node.AccountSummary{})
-		return
-	}
-	end := offset + limit
-	if end > len(accounts) {
-		end = len(accounts)
-	}
-	writeJSON(w, http.StatusOK, accounts[offset:end])
+	page := h.node.GetAccountsPage(offset, limit)
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (h *Handler) handleGetSupply(w http.ResponseWriter, r *http.Request) {

@@ -497,6 +497,10 @@ func isLeaseStateTransition(t BlockType) bool {
 	return false
 }
 
+func (l *Ledger) GetAssetBalance(account, asset string) uint64 {
+	return l.getAssetBalance(account, asset)
+}
+
 func (l *Ledger) getAssetBalance(account, asset string) uint64 {
 	l.assetBalMu.RLock()
 	defer l.assetBalMu.RUnlock()
@@ -527,6 +531,10 @@ func (l *Ledger) subAssetBalance(account, asset string, delta uint64) {
 		return
 	}
 	m[asset] -= delta
+}
+
+func (l *Ledger) SetAssetBalance(account, asset string, balance uint64) {
+	l.setAssetBalance(account, asset, balance)
 }
 
 func (l *Ledger) setAssetBalance(account, asset string, balance uint64) {
@@ -2386,6 +2394,23 @@ func (l *Ledger) GetChain(account string) []*Block {
 	return out
 }
 
+func (l *Ledger) GetChainLength(account string) int {
+	type chainLengthReader interface {
+		GetAccountChainLength(account string) (int, error)
+	}
+	if clr, ok := l.store.(chainLengthReader); ok {
+		n, err := clr.GetAccountChainLength(account)
+		if err == nil {
+			return n
+		}
+	}
+	chain, err := l.store.GetAccountChain(account)
+	if err != nil || chain == nil {
+		return 0
+	}
+	return len(chain.Blocks)
+}
+
 var storeReadErrors atomic.Uint64
 
 func StoreReadErrors() uint64 {
@@ -2547,11 +2572,7 @@ func (l *Ledger) initBlockCount() {
 	frontiers := l.Frontiers()
 	var count int64
 	for acc := range frontiers {
-		chain, err := l.store.GetAccountChain(acc)
-		if err != nil || chain == nil {
-			continue
-		}
-		count += int64(len(chain.Blocks))
+		count += int64(l.GetChainLength(acc))
 	}
 	l.blockCount.Store(count)
 }

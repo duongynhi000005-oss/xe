@@ -90,6 +90,10 @@ type Node struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	wg               sync.WaitGroup
+
+	accountsPageMu  sync.Mutex
+	cachedSortAddrs []accountSortEntry
+	cachedSortAt    time.Time
 }
 
 const maxInFlightVotePulls = 32
@@ -975,7 +979,7 @@ func (n *Node) GetFrontiersDetailed() []FrontierInfo {
 			info.Timestamp = b.Timestamp
 			info.Representative = b.Representative
 		}
-		info.BlockCount = len(n.Ledger.GetChain(account))
+		info.BlockCount = n.Ledger.GetChainLength(account)
 		out = append(out, info)
 	}
 	return out
@@ -990,27 +994,82 @@ type AccountSummary struct {
 	LastBlockTimestamp int64             `json:"last_block_timestamp"`
 }
 
+type accountSortEntry struct {
+	address string
+	xeBal   uint64
+	hash    string
+}
+
+const accountsSortCacheTTL = time.Second
+
+func (n *Node) getAccountSummary(account, hash string) AccountSummary {
+	var balance uint64
+	var ts int64
+	if b := n.Ledger.GetBlock(hash); b != nil {
+		balance = b.Balance
+		ts = b.Timestamp
+	}
+	return AccountSummary{
+		Address:            account,
+		Balance:            balance,
+		Balances:           n.Ledger.GetAssetBalances(account),
+		BlockCount:         n.Ledger.GetChainLength(account),
+		Frontier:           hash,
+		LastBlockTimestamp: ts,
+	}
+}
+
 func (n *Node) GetAllAccounts() []AccountSummary {
 	frontiers := n.Ledger.Frontiers()
 	out := make([]AccountSummary, 0, len(frontiers))
 	for account, hash := range frontiers {
-		chain := n.Ledger.GetChain(account)
-		var balance uint64
-		if len(chain) > 0 {
-			balance = chain[len(chain)-1].Balance
-		}
-		var ts int64
-		if len(chain) > 0 {
-			ts = chain[len(chain)-1].Timestamp
-		}
-		out = append(out, AccountSummary{
-			Address:            account,
-			Balance:            balance,
-			Balances:           n.Ledger.GetAssetBalances(account),
-			BlockCount:         len(chain),
-			Frontier:           hash,
-			LastBlockTimestamp: ts,
+		out = append(out, n.getAccountSummary(account, hash))
+	}
+	return out
+}
+
+func (n *Node) getSortedAccountEntries() []accountSortEntry {
+	n.accountsPageMu.Lock()
+	defer n.accountsPageMu.Unlock()
+	if n.cachedSortAddrs != nil && time.Since(n.cachedSortAt) < accountsSortCacheTTL {
+		return n.cachedSortAddrs
+	}
+	frontiers := n.Ledger.Frontiers()
+	entries := make([]accountSortEntry, 0, len(frontiers))
+	for addr, hash := range frontiers {
+		entries = append(entries, accountSortEntry{
+			address: addr,
+			xeBal:   n.Ledger.GetAssetBalance(addr, "XE"),
+			hash:    hash,
 		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].xeBal != entries[j].xeBal {
+			return entries[i].xeBal > entries[j].xeBal
+		}
+		return entries[i].address < entries[j].address
+	})
+	n.cachedSortAddrs = entries
+	n.cachedSortAt = time.Now()
+	return entries
+}
+
+func (n *Node) GetAccountsPage(offset, limit int) []AccountSummary {
+	if limit <= 0 {
+		return []AccountSummary{}
+	}
+	entries := n.getSortedAccountEntries()
+	if offset >= len(entries) {
+		return []AccountSummary{}
+	}
+	end := offset + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	pageEntries := entries[offset:end]
+	out := make([]AccountSummary, len(pageEntries))
+	for i, entry := range pageEntries {
+		out[i] = n.getAccountSummary(entry.address, entry.hash)
 	}
 	return out
 }
